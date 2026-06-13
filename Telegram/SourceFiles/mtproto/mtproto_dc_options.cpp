@@ -28,8 +28,8 @@ struct BuiltInDc {
 	int port;
 };
 
-#define IpV4 "192.168.1.100"
-#define IpV6 "192.168.1.100"
+#define IpV4 "192.168.0.96"
+#define IpV6 "192.168.0.96"
 #define IpV4Port 20443
 #define IpV4Port2 20443
 #define IpV6Port 20443
@@ -64,22 +64,22 @@ const BuiltInDc kBuiltInDcsIPv6Test[] = {
 
 const char *kTestPublicRSAKeys[] = { "\
 -----BEGIN RSA PUBLIC KEY-----\n\
-MIIBCgKCAQEAu+3tvscWDAlEvVylTeMr5FpU2AjgqzoQHPjzp69r0YAtq0a8rX0M\n\
-Ue78F/FRAqBaEbZW6WBzF3AjOlNYpOtvvwGhl9rGCgziunbd9nwcKJBMDWS9O7Mz\n\
-/8xjz/swIB4V56XcjOhrjUHJ/GniFKoum00xeEcYnr5xnLesvpVMq97Ga6b+xt3H\n\
-RftHY/Zy1dG5zs8upuiAOlEiKilhu1IthfMjFG3NF6TiGrO9YU3YixFbJy67jtHk\n\
-v5FarscM2fC5iWQ2eP1y6jXR64sGU3QjncvozYOePrH9jGcnmzUmj42x/H28IjJQ\n\
-9EjEc22sPOuauK0IF2QiCGh+TfsKCK189wIDAQAB\n\
+MIIBCgKCAQEA0sAxdgZtSzcJ9B5fbMG7t1Je4EE+oBo1PJ9BjH1tCZvXZjVzPSd7\n\
+jF7h4eflmrxZ76Mu4x9YczUasexLvAaYqAIxT9IRtiGVW+kCUBcj3GO204yHthnI\n\
+5YLwCu3BljFWouzVfBVT+4JwkF/QHn961TBLMhmqK2pW0Z8SUZCqtcYv9yD/u4uq\n\
+hJRDgMdc+blC2zF73deDPl8S6Yfl2PlrE8nXktcz1dRim5MvkDd4Dl/p2SFBBipX\n\
+d4lHjKopYnCeVEYLAbGABV7zdsuwbexdwkGkxN9+Gitnh/PisHl96mz2ozMPJ4or\n\
+s3jDrlPm0VER/cBw6uhZOl4pzVoZFnhl6QIDAQAB\n\
 -----END RSA PUBLIC KEY-----" };
 
 const char *kPublicRSAKeys[] = { "\
 -----BEGIN RSA PUBLIC KEY-----\n\
-MIIBCgKCAQEAu+3tvscWDAlEvVylTeMr5FpU2AjgqzoQHPjzp69r0YAtq0a8rX0M\n\
-Ue78F/FRAqBaEbZW6WBzF3AjOlNYpOtvvwGhl9rGCgziunbd9nwcKJBMDWS9O7Mz\n\
-/8xjz/swIB4V56XcjOhrjUHJ/GniFKoum00xeEcYnr5xnLesvpVMq97Ga6b+xt3H\n\
-RftHY/Zy1dG5zs8upuiAOlEiKilhu1IthfMjFG3NF6TiGrO9YU3YixFbJy67jtHk\n\
-v5FarscM2fC5iWQ2eP1y6jXR64sGU3QjncvozYOePrH9jGcnmzUmj42x/H28IjJQ\n\
-9EjEc22sPOuauK0IF2QiCGh+TfsKCK189wIDAQAB\n\
+MIIBCgKCAQEA0sAxdgZtSzcJ9B5fbMG7t1Je4EE+oBo1PJ9BjH1tCZvXZjVzPSd7\n\
+jF7h4eflmrxZ76Mu4x9YczUasexLvAaYqAIxT9IRtiGVW+kCUBcj3GO204yHthnI\n\
+5YLwCu3BljFWouzVfBVT+4JwkF/QHn961TBLMhmqK2pW0Z8SUZCqtcYv9yD/u4uq\n\
+hJRDgMdc+blC2zF73deDPl8S6Yfl2PlrE8nXktcz1dRim5MvkDd4Dl/p2SFBBipX\n\
+d4lHjKopYnCeVEYLAbGABV7zdsuwbexdwkGkxN9+Gitnh/PisHl96mz2ozMPJ4or\n\
+s3jDrlPm0VER/cBw6uhZOl4pzVoZFnhl6QIDAQAB\n\
 -----END RSA PUBLIC KEY-----" };
 
 } // namespace
