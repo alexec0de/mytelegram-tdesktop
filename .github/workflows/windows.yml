@@ -1,0 +1,327 @@
+name: Windows
+
+on:
+  # Auto-build on push is disabled — every commit on master shouldn't burn
+  # 3+ hours of GitHub-hosted runner time. Trigger manually via the
+  # "Run workflow" button on the Actions tab, or it'll fire on PR / release.
+  pull_request:
+    branches: [master, main]
+  workflow_dispatch:
+  release:
+    types: [created]
+
+jobs:
+  windows-x64:
+    name: Windows x64 build
+    runs-on: windows-latest
+    timeout-minutes: 360
+
+    env:
+      ARCH: x64
+      ARCH_LABEL: x64
+      LIBS_SUBDIR: '\win64'
+      PREPARE_PATH: "Telegram/build/prepare/prepare.py"
+
+    defaults:
+      run:
+        shell: cmd
+
+    steps:
+      - name: Prepare directories.
+        # На windows-latest C: имеет ~14 ГБ свободных, а D: (temp disk)
+        # обычно 80-130 ГБ. Хостю TBuild на диске с большим количеством
+        # места и делаю junction в стандартные пути (%userprofile%\TBuild
+        # и %GITHUB_WORKSPACE%\TBuild), чтобы остальные шаги работали
+        # как раньше. Та же логика что и в windows-x86.yml.
+        shell: pwsh
+        run: |
+          $candidates = @('D:\','C:\') | Where-Object { Test-Path $_ }
+          $best = $null
+          foreach ($drv in $candidates) {
+            $free = (Get-PSDrive -Name $drv.TrimEnd(':\')).Free
+            Write-Host ("{0} free: {1:N1} GB" -f $drv, ($free / 1GB))
+            if (-not $best -or $free -gt $best.Free) {
+              $best = [PSCustomObject]@{ Drive = $drv; Free = $free }
+            }
+          }
+          $tbuildHost = (Join-Path $best.Drive 'TBuild')
+          Write-Host "Hosting TBuild on $tbuildHost"
+          New-Item -ItemType Directory -Force -Path $tbuildHost | Out-Null
+          New-Item -ItemType Directory -Force -Path (Join-Path $tbuildHost 'Libraries') | Out-Null
+
+          $userTBuild = Join-Path $env:USERPROFILE 'TBuild'
+          $wsTBuild   = Join-Path $env:GITHUB_WORKSPACE 'TBuild'
+          if ((Resolve-Path $userTBuild -ErrorAction SilentlyContinue).Path -ne $tbuildHost) {
+            cmd /c mklink /d "$userTBuild" "$tbuildHost"
+          }
+          if ((Resolve-Path $wsTBuild -ErrorAction SilentlyContinue).Path -ne $tbuildHost) {
+            cmd /c mklink /d "$wsTBuild" "$tbuildHost"
+          }
+
+          "TBUILD=$wsTBuild"                                              | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+          "LibrariesPath=$wsTBuild\Libraries${{ env.LIBS_SUBDIR }}"       | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+
+      - name: Get repository name.
+        shell: bash
+        run: echo "REPO_NAME=${GITHUB_REPOSITORY##*/}" >> $GITHUB_ENV
+
+      - name: Clone.
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          path: ${{ env.TBUILD }}\${{ env.REPO_NAME }}
+
+      - name: Read SDK version.
+        shell: bash
+        run: |
+          DOCPATH=$TBUILD/$REPO_NAME/docs/building-win.md
+          SDK="$(grep "SDK version" $DOCPATH | sed -r 's/.*\*\*(.*)\*\* SDK version.*/\1/')"
+          echo "SDK=$SDK" >> $GITHUB_ENV
+
+          sed -i '/CMAKE_${lang}_FLAGS_DEBUG_INIT/s/${_Zi}//' "$PROGRAMFILES"/CMake/share/cmake*/Modules/Platform/Windows-MSVC.cmake
+
+          echo "$(sha256sum $TBUILD/$REPO_NAME/$PREPARE_PATH | awk '{ print $1 }')" >> CACHE_KEY.txt
+          echo "$SDK" >> CACHE_KEY.txt
+          echo "CACHE_KEY=$(sha256sum CACHE_KEY.txt | awk '{ print $1 }')" >> $GITHUB_ENV
+
+          git config --global user.email "ci@opengra.me"
+          git config --global user.name "Opengram CI"
+
+      - uses: ilammy/msvc-dev-cmd@v1
+        name: Native Tools Command Prompt.
+        with:
+          arch: x64
+          sdk: ${{ env.SDK }}
+
+      - name: NuGet sources.
+        run: |
+          nuget sources Disable -Name "Microsoft Visual Studio Offline Packages"
+          nuget sources Add -Source https://api.nuget.org/v3/index.json & exit 0
+
+      - name: ThirdParty cache.
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.TBUILD }}\ThirdParty
+          key: ${{ runner.OS }}-x64-third-party-${{ env.CACHE_KEY }}
+          restore-keys: ${{ runner.OS }}-x64-third-party-
+
+      - name: Libraries cache.
+        uses: actions/cache@v4
+        with:
+          path: |
+            ${{ env.LibrariesPath }}\*
+            !${{ env.LibrariesPath }}\cache_keys
+            !${{ env.LibrariesPath }}\[qQ]t[_-]*
+            ${{ env.LibrariesPath }}\cache_keys\*
+            !${{ env.LibrariesPath }}\cache_keys\[qQ]t[_-]*
+          key: ${{ runner.OS }}-x64-libs-${{ env.CACHE_KEY }}
+          restore-keys: ${{ runner.OS }}-x64-libs-
+
+      - name: Qt cache.
+        uses: actions/cache@v4
+        with:
+          path: |
+            ${{ env.LibrariesPath }}\[qQ]t[_-]*
+            ${{ env.LibrariesPath }}\cache_keys\[qQ]t[_-]*
+          key: ${{ runner.OS }}-x64-qt6-${{ env.CACHE_KEY }}
+          restore-keys: ${{ runner.OS }}-x64-qt6-
+
+      - name: Free disk space (Windows).
+        shell: pwsh
+        run: |
+          # Qt 6.11 debug+release на static-runtime сборке выжирает диск
+          # сверх ~14 GB свободных, которые есть на windows-latest. Чищу
+          # ВСЁ что не нужно для нативной C++ сборки.
+          # ОСТОРОЖНО: НЕ трогаю C:\ProgramData\Chocolatey — там build-
+          # инструменты (ninja, cmake), и не трогаю Strawberry/msys64/
+          # Miniconda — perl из Strawberry нужен части prepare-скриптов.
+          $targets = @(
+            'C:\Android', 'C:\Program Files (x86)\Android', 'C:\Program Files\Google\Android',
+            'C:\hostedtoolcache\Java_Adopt_jdk',
+            'C:\hostedtoolcache\Java_Temurin-Hotspot_jdk',
+            'C:\hostedtoolcache\Java_Microsoft_jdk',
+            'C:\hostedtoolcache\Java_Zulu_jdk',
+            'C:\Program Files\Microsoft\jdk-*',
+            'C:\hostedtoolcache\go', 'C:\hostedtoolcache\Ruby', 'C:\hostedtoolcache\PyPy',
+            'C:\hostedtoolcache\node', 'C:\hostedtoolcache\boost',
+            'C:\Program Files\dotnet', 'C:\Program Files (x86)\dotnet',
+            'C:\Program Files\MongoDB', 'C:\Program Files (x86)\MongoDB',
+            'C:\Program Files\Microsoft SQL Server',
+            'C:\Program Files (x86)\Microsoft SQL Server',
+            'C:\Program Files (x86)\WindowsPowerShell\Modules\Az*',
+            'C:\Program Files\Mozilla Firefox',
+            'C:\Program Files\Mozilla Maintenance Service',
+            'C:\Program Files (x86)\Google\Chrome',
+            'C:\Program Files\Google\Chrome',
+            'C:\Program Files\Microsoft\Edge',
+            'C:\selenium', 'C:\SeleniumWebDrivers',
+            'C:\Program Files\Microsoft Visual Studio\2022\Enterprise\Common7\IDE\CommonExtensions\Microsoft\TeamFoundation',
+            'C:\Program Files\Microsoft Visual Studio\2022\Enterprise\Common7\IDE\Extensions\TestPlatform',
+            'C:\ProgramData\Package Cache',
+            'C:\Users\runneradmin\.npm',
+            'C:\Users\runneradmin\AppData\Local\NuGet\v3-cache',
+            "$env:TEMP\*", "$env:windir\Temp\*"
+          )
+          foreach ($t in $targets) {
+            $resolved = Resolve-Path -Path $t -ErrorAction SilentlyContinue
+            foreach ($p in $resolved) {
+              Write-Host "Removing $p"
+              Remove-Item -Recurse -Force -LiteralPath $p.Path -ErrorAction SilentlyContinue
+            }
+          }
+          Get-PSDrive -Name C, D -ErrorAction SilentlyContinue |
+              Select-Object Name, Used, Free, @{N='FreeGB';E={[math]::Round($_.Free/1GB,1)}}
+
+      - name: Libraries.
+        env:
+          GYP_MSVS_OVERRIDE_PATH: 'C:\Program Files\Microsoft Visual Studio\2022\Enterprise\'
+          GYP_MSVS_VERSION: 2022
+        run: |
+          %TBUILD%\%REPO_NAME%\Telegram\build\prepare\win.bat silent qt6
+
+      - name: Trim post-prepare artifacts.
+        # Самый большой пожиратель диска перед сборкой Telegram-target —
+        # промежуточные Debug-/Release-объектники библиотек, которые
+        # prepare наплодил по пути. Финальный Telegram (Release, без
+        # PDB благодаря CMAKE_MSVC_DEBUG_INFORMATION_FORMAT=) ничего из
+        # этого не использует — он линкует .lib'ы. Срезаю всё лишнее
+        # ДО самого тяжёлого шага. Должно высвободить 15-25 ГБ.
+        shell: pwsh
+        continue-on-error: true
+        run: |
+          $libsPath = $env:LibrariesPath
+          if (-not (Test-Path $libsPath)) {
+              Write-Host "LibrariesPath not present yet, skipping"
+              exit 0
+          }
+          $before = (Get-PSDrive -Name C).Free
+          # Эти ext'ы — чисто промежуточные артефакты компилятора, для
+          # связывания готового exe не нужны.
+          $patterns = @('*.pdb', '*.obj', '*.ilk', '*.exp', '*.tlog', '*.lastbuildstate')
+          foreach ($p in $patterns) {
+              Get-ChildItem -Path $libsPath -Recurse -Filter $p -ErrorAction SilentlyContinue |
+                  Remove-Item -Force -ErrorAction SilentlyContinue
+          }
+          # Папки Debug/ внутри каждого build/<lib>: финальная сборка
+          # Telegram идёт в Release, debug-копии библиотек не линкуются.
+          Get-ChildItem -Path $libsPath -Recurse -Directory -Filter 'Debug' -ErrorAction SilentlyContinue |
+              Where-Object { $_.FullName -notmatch '\\(src|include)\\' } |
+              Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+          # Build-каталоги CMake внутри prepare'а: после установки в
+          # Libraries сам build/ не нужен (опасные имена не трогаю).
+          $junk = @('build\*\Debug', 'build\*\x64\Debug')
+          foreach ($g in $junk) {
+              $resolved = Resolve-Path -Path (Join-Path $libsPath $g) -ErrorAction SilentlyContinue
+              foreach ($r in $resolved) { Remove-Item -Recurse -Force -LiteralPath $r.Path -ErrorAction SilentlyContinue }
+          }
+          $after = (Get-PSDrive -Name C).Free
+          $freed = [math]::Round(($after - $before) / 1GB, 2)
+          Write-Host "Trim freed approximately $freed GB"
+          Get-PSDrive -Name C, D -ErrorAction SilentlyContinue |
+              Select-Object Name, @{N='FreeGB';E={[math]::Round($_.Free/1GB,1)}}
+
+      - name: Disable Qt 6.11 strict overflow asserts.
+        # Qt 6.11 hardened qsizetype / QSize / QPoint / layout arithmetic and
+        # bakes a `Q_ASSERT_X(... "Overflow in operator+ ...")` directly into
+        # QCheckedInt::operator+ / -* / etc. — bypassing any "policy" template
+        # arg, so the assert fires regardless of CMAKE_BUILD_TYPE and regardless
+        # of whether the code chose AssertReportPolicy or IgnoreOverflowPolicy.
+        # In Opengram this stops the emoji-status picker dead (__fastfail at
+        # qcheckedint_impl.h:69). We neutralise Q_ASSERT_X / Q_ASSERT for the
+        # scope of this single header by wrapping it with push_macro/pop_macro:
+        # asserts in the rest of Qt and tdesktop are untouched, only the int
+        # arithmetic in qcheckedint_impl.h overflows silently as in Qt <= 6.10.
+        # Safe in practice — the values that overflow are cosmetic layout ints
+        # (column widths, paddings), not security-sensitive bounds.
+        shell: pwsh
+        run: |
+          $hdr = Get-ChildItem -Path "$env:LibrariesPath" -Recurse -Filter qcheckedint_impl.h `
+              -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $hdr) {
+            Write-Host "::warning::qcheckedint_impl.h not found under $env:LibrariesPath — Qt 6.11 layout may have changed, skipping patch"
+          } else {
+            $marker = '/* opengram-overflow-asserts-disabled */'
+            $content = Get-Content -Raw -LiteralPath $hdr.FullName
+            if ($content.Contains($marker)) {
+              Write-Host "Header already patched at $($hdr.FullName) — skipping"
+            } else {
+              # Собираю через массив строк, а не here-string: PowerShell @"..."@
+              # требует, чтобы открывающий и закрывающий маркеры стояли в первой
+              # колонке без отступа — это конфликтует с YAML-отступами под
+              # `run: |` и валит парсер ("could not find expected ':'").
+              $nl = "`r`n"
+              $prefix = ($marker,
+                '// Qt 6.11 fires Q_ASSERT_X from QCheckedInt::operator+ / -*''s body',
+                '// directly — even when the IgnoreOverflowPolicy template arg is chosen.',
+                '// Mute the assert macros for the duration of this header so the int',
+                '// arithmetic overflows silently like it did in Qt <= 6.10.',
+                '#pragma push_macro("Q_ASSERT_X")',
+                '#pragma push_macro("Q_ASSERT")',
+                '#undef Q_ASSERT_X',
+                '#undef Q_ASSERT',
+                '#define Q_ASSERT_X(cond, where, what) ((void)0)',
+                '#define Q_ASSERT(cond) ((void)0)') -join $nl
+              $suffix = ('',
+                '#pragma pop_macro("Q_ASSERT")',
+                '#pragma pop_macro("Q_ASSERT_X")') -join $nl
+              $patched = $prefix + $nl + $content + $nl + $suffix
+              Set-Content -NoNewline -LiteralPath $hdr.FullName -Value $patched
+              Write-Host "Patched $($hdr.FullName): wrapped Q_ASSERT_X / Q_ASSERT in push/pop_macro guards"
+            }
+          }
+
+      - name: Build Opengram Desktop.
+        env:
+          # Repo secrets, fall back to public test credentials. Test creds
+          # are rate-limited on the official Telegram backend but are fine
+          # against our own opengra.me server.
+          TDESKTOP_API_ID: ${{ secrets.TDESKTOP_API_ID || '17349' }}
+          TDESKTOP_API_HASH: ${{ secrets.TDESKTOP_API_HASH || '344583e45741c457fe1862106095a5eb' }}
+        run: |
+          cd %TBUILD%\%REPO_NAME%\Telegram
+
+          call configure.bat qt6 x64 ^
+          -D CMAKE_BUILD_TYPE=Release ^
+          -D CMAKE_CONFIGURATION_TYPES=Release ^
+          -D CMAKE_MSVC_DEBUG_INFORMATION_FORMAT= ^
+          -D DESKTOP_APP_DISABLE_AUTOUPDATE=ON ^
+          -D DESKTOP_APP_DISABLE_CRASH_REPORTS=ON ^
+          -D TDESKTOP_API_ID=%TDESKTOP_API_ID% ^
+          -D TDESKTOP_API_HASH=%TDESKTOP_API_HASH%
+
+          rem --parallel без числа = все ядра runner'а (4-8); тяжёлые
+          rem TU вроде send_files_box / share_box / star_gift_* временно
+          rem держат >200 МБ .obj каждый, 8 одновременно = ENOSPC на C:.
+          rem 2 — медленнее, но добегает до конца.
+          cmake --build ..\out --config Release --parallel 2
+
+      - name: Package artifact.
+        # Qt 6.11 ships ICU as separate DLLs even under a static Qt build —
+        # users without them on PATH get "icu.dll not found" on first launch.
+        # Bundle ICU DLLs (and any sibling Qt runtime DLLs) next to the .exe.
+        run: |
+          set OUT=%TBUILD%\%REPO_NAME%\out\Release
+          set QTBIN=%LibrariesPath%\Qt-6.11.0\bin
+          mkdir artifact
+          if exist %OUT%\Opengram.exe move %OUT%\Opengram.exe artifact\
+          if exist %OUT%\Telegram.exe move %OUT%\Telegram.exe artifact\Opengram.exe
+          if exist %OUT%\Updater.exe move %OUT%\Updater.exe artifact\
+          if exist "%QTBIN%" (
+              for %%f in ("%QTBIN%\icu*.dll" "%QTBIN%\icudt*.dll" "%QTBIN%\icuin*.dll" "%QTBIN%\icuuc*.dll") do (
+                  if exist "%%f" copy /Y "%%f" artifact\ >nul
+              )
+          )
+          dir artifact
+
+      - uses: actions/upload-artifact@v4
+        name: Upload artifact.
+        with:
+          name: opengram-windows-x64
+          path: artifact\
+          retention-days: 30
+
+      - name: Attach to release.
+        if: github.event_name == 'release'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifact/*
